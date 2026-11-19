@@ -8,7 +8,7 @@ import logging
 import time
 
 from app import storage
-from app.pipeline import build_sources, run_once
+from app.pipeline import run_and_record
 from app.settings_schema import defaults
 
 log = logging.getLogger("worker")
@@ -30,7 +30,9 @@ def tick() -> int:
     if not settings.get("positions"):
         log.info("Не заданы желаемые должности, жду настройки")
         return 60
-    stats = run_once(settings, build_sources(settings))
+    stats = run_and_record(settings, "по расписанию")
+    if stats is None:
+        return interval
     log.info(
         "Найдено %s, новых %s, отсеяно %s, дублей %s, не подошло %s, готово %s, ошибок %s",
         stats.found, stats.new, stats.filtered, stats.duplicates, stats.low_score, stats.ready, stats.errors,
@@ -38,6 +40,25 @@ def tick() -> int:
     for m in stats.messages:
         log.warning(m)
     return interval
+
+
+def settings_fingerprint() -> str:
+    """Отпечаток настроек: если вы что-то поменяли в панели, воркер запускается сразу, не дожидаясь интервала."""
+    import hashlib
+    import json
+
+    s = {k: v for k, v in storage.load_settings().items() if not k.startswith("_")}
+    return hashlib.sha256(json.dumps(s, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def sleep_until_due(pause: int, fingerprint: str, step: int = 30) -> None:
+    waited = 0
+    while waited < pause:
+        time.sleep(min(step, pause - waited))
+        waited += step
+        if settings_fingerprint() != fingerprint:
+            log.info("Настройки изменились, запускаю поиск")
+            return
 
 
 def main() -> None:
@@ -49,12 +70,13 @@ def main() -> None:
         tick()
         return
     while True:
+        fingerprint = settings_fingerprint()
         try:
             pause = tick()
         except Exception:  # noqa: BLE001 - воркер не должен падать насовсем
             log.exception("Проход завершился ошибкой")
             pause = 300
-        time.sleep(pause)
+        sleep_until_due(pause, fingerprint)
 
 
 if __name__ == "__main__":

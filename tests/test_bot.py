@@ -132,7 +132,35 @@ def test_other_chat_is_ignored(env):
     press(env, f"a:{env['vid']}", chat="999")
     assert env["storage"].get_vacancy(env["vid"])["status"] == "ready"
     text(env, "/status", chat="999")
-    assert len(env["tg"].sent) == 1  # только карточка
+    # Чужому чату бот не показывает данные, только подсказку с его chat ID.
+    assert len(env["tg"].sent) == 2
+    hint = env["tg"].sent[-1]
+    assert hint["chat"] == "999" and "другой chat ID" in hint["text"] and "Сегодня" not in hint["text"]
+
+
+def test_chat_id_with_spaces_works(env):
+    env["settings"]["telegram_chat_id"] = " 777 "
+    text(env, "/status")
+    assert "Сегодня" in env["tg"].sent[-1]["text"]
+
+
+def test_start_drops_webhook():
+    from app.bot import start
+
+    class TG:
+        calls = []
+
+        def call(self, method, **kw):
+            self.calls.append(method)
+            if method == "getMe":
+                return {"username": "my_bot"}
+            if method == "getWebhookInfo":
+                return {"url": "https://old.example/hook"}
+            return True
+
+    tg = TG()
+    start(tg, {"telegram_chat_id": "1"})
+    assert tg.calls == ["getMe", "getWebhookInfo", "deleteWebhook"]
 
 
 def test_unknown_chat_gets_its_id_when_not_configured(env):

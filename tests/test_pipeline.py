@@ -247,3 +247,26 @@ def test_source_failure_does_not_stop_others(db):
 
     stats = run_once(settings(), [Broken(), FakeSource([Vacancy("hh", "1", "Python", "Р", "u")])], llm=make_llm([]))
     assert stats.ready == 1 and "ошибка поиска" in stats.messages[0]
+
+
+def test_hh_403_is_explained():
+    from app.sources.hh import HHClient, HHError
+
+    def handler(request):
+        return httpx.Response(403, json={"errors": [{"type": "forbidden"}], "description": "Forbidden"})
+
+    client = HHClient(httpx.Client(transport=httpx.MockTransport(handler)), contact="me@x.ru", app_token="tok")
+    with pytest.raises(HHError) as err:
+        client.search({"positions": ["Python"]})
+    assert "403" in str(err.value) and "forbidden" in str(err.value) and "IP сервера" in str(err.value)
+
+
+def test_hh_headers_from_settings(monkeypatch):
+    from app.sources.hh import HHClient
+
+    monkeypatch.delenv("HH_USER_AGENT", raising=False)
+    seen = []
+    client = HHClient(httpx.Client(transport=hh_transport(seen)), contact="me@x.ru", app_token="tok")
+    client.search({"positions": ["Python"]})
+    assert seen[-1].headers["HH-User-Agent"] == "AI-agent-finding-work/0.3 (me@x.ru)"
+    assert seen[-1].headers["Authorization"] == "Bearer tok"
