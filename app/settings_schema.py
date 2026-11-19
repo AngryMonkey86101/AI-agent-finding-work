@@ -46,6 +46,7 @@ LETTER_LANG = (("ru", "Русский"), ("en", "English"))
 GROUPS = (
     ("search", "Что ищем"),
     ("letter", "Сопроводительные письма"),
+    ("email", "Отклики по email"),
     ("schedule", "Отклики и отчёты"),
     ("keys", "Ключи и токены"),
 )
@@ -79,6 +80,22 @@ FIELDS: tuple[Field, ...] = (
           help="Тон, длина, что обязательно упомянуть."),
     Field("letter_signature", "Подпись", "textarea", "letter", placeholder="Иван Иванов\n+7 900 000-00-00\nt.me/ivan"),
 
+    Field("hh_resume_url", "Ссылка на резюме на hh.ru", "text", "letter", placeholder="https://hh.ru/resume/...",
+          help="Агент добавит её в письма, которые уходят на email работодателя."),
+
+    # --- Email
+    Field("email_enabled", "Предлагать отклик по email, если в вакансии указана почта", "checkbox", "email", default=False),
+    Field("smtp_host", "SMTP-сервер", "text", "email", placeholder="smtp.gmail.com",
+          help="Gmail: smtp.gmail.com, Яндекс: smtp.yandex.ru, Mail.ru: smtp.mail.ru."),
+    Field("smtp_port", "SMTP-порт", "number", "email", default=465, min=1, max=65535,
+          help="465 для SSL, 587 для STARTTLS."),
+    Field("smtp_user", "Адрес почты (логин)", "text", "email", placeholder="you@example.com"),
+    Field("smtp_password", "Пароль приложения", "secret", "email",
+          help="Не основной пароль, а пароль приложения из настроек безопасности почты."),
+    Field("email_from_name", "Имя отправителя", "text", "email", placeholder="Иван Иванов"),
+    Field("email_subject", "Тема письма", "text", "email", default="Отклик на вакансию «{vacancy}»",
+          help="{vacancy} заменится на название вакансии."),
+
     # --- Отклики и отчёты
     Field("search_interval_minutes", "Проверять новые вакансии каждые, мин", "number", "schedule", default=30, min=5, max=1440),
     Field("daily_limit", "Не больше откликов в день", "number", "schedule", default=20, min=1, max=200,
@@ -89,11 +106,6 @@ FIELDS: tuple[Field, ...] = (
     Field("paused", "Поставить агента на паузу", "checkbox", "schedule", default=False),
 
     # --- Ключи
-    Field("hh_client_id", "hh.ru Client ID", "secret", "keys",
-          help="Из приложения на dev.hh.ru. Нужен для входа в ваш аккаунт hh.ru и откликов."),
-    Field("hh_client_secret", "hh.ru Client Secret", "secret", "keys"),
-    Field("hh_resume_id", "ID резюме на hh.ru", "text", "keys",
-          help="С каким резюме откликаться. Это код в адресе резюме: hh.ru/resume/<ID>."),
     Field("deepseek_api_key", "DeepSeek API key", "secret", "keys"),
     Field("deepseek_model", "Модель DeepSeek", "text", "keys", default="deepseek-chat"),
     Field("telegram_bot_token", "Токен Telegram-бота", "secret", "keys", help="Выдаёт @BotFather."),
@@ -180,6 +192,13 @@ def parse_form(form, current: dict) -> tuple[dict, dict]:
     except (ZoneInfoNotFoundError, ValueError):
         errors["timezone"] = "Неизвестный часовой пояс. Пример: Europe/Moscow."
     values["timezone"] = tz
+
+    if values.get("email_enabled"):
+        for key in ("smtp_host", "smtp_user", "smtp_password"):
+            if not values.get(key):
+                errors[key] = "Нужно для отправки писем на email."
+        if values.get("smtp_user") and "@" not in values["smtp_user"]:
+            errors["smtp_user"] = "Укажите адрес почты целиком."
 
     return values, errors
 

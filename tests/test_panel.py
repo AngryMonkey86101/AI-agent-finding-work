@@ -155,3 +155,17 @@ def test_doc_extraction_if_converter_available(tmp_path):
     from app.resume import extract_text
 
     assert "Python-разработчик" in extract_text("cv.doc", doc.read_bytes())
+
+
+def test_email_requires_smtp_when_enabled(client):
+    token = csrf(client)
+    r = client.post("/settings", data=base_form(token, email_enabled="on", smtp_user="bad"), auth=AUTH)
+    assert r.status_code == 422 and "Нужно для отправки писем" in r.text and "адрес почты целиком" in r.text
+
+    ok = base_form(token, email_enabled="on", smtp_host="smtp.yandex.ru", smtp_user="me@ya.ru",
+                   smtp_password="app-pass", smtp_port="465")
+    assert client.post("/settings", data=ok, auth=AUTH, follow_redirects=False).status_code == 303
+    from app import storage
+
+    s = storage.load_settings()
+    assert s["email_enabled"] is True and s["smtp_port"] == 465 and s["smtp_password"] == "app-pass"
