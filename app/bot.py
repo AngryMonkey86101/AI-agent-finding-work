@@ -6,7 +6,7 @@ import html
 import logging
 import time
 
-from app import mailer, storage
+from app import mailer, report, storage
 from app.deepseek import DeepSeek
 from app.settings_schema import defaults
 from app.sources.base import from_row
@@ -29,7 +29,8 @@ HELP = (
     "• «Отправил» отмечает отклик для вечернего отчёта.\n"
     "• «Изменить письмо» перепишет его по вашим словам.\n"
     "• «На email» отправит письмо с резюме работодателю, если в вакансии есть почта.\n\n"
-    "/status — сводка за сегодня"
+    "/status — сводка за сегодня\n"
+    "/report — вечерний отчёт прямо сейчас"
 )
 
 
@@ -98,6 +99,14 @@ class Bot:
             sent += 1
         return sent
 
+    def maybe_send_report(self, settings: dict, now=None) -> bool:
+        chat = settings.get("telegram_chat_id")
+        if not chat or not report.is_due(settings, storage.get_state("report_sent_date"), now):
+            return False
+        self.tg.send(chat, report.build(settings, now))
+        storage.set_state("report_sent_date", report.local_now(settings, now).date().isoformat())
+        return True
+
     def refresh_card(self, v: dict, settings: dict) -> None:
         if not v.get("tg_message_id"):
             return
@@ -142,6 +151,9 @@ class Bot:
         if waiting and not text.startswith("/"):
             storage.set_state("edit_wait", None)
             self.rewrite_letter(int(waiting), text, settings)
+            return
+        if text.startswith("/report"):
+            self.tg.send(chat, report.build(settings))
             return
         if text.startswith("/status"):
             self.tg.send(chat, status_text(settings))
@@ -255,6 +267,7 @@ def main() -> None:
                 except Exception:  # noqa: BLE001
                     log.exception("Не удалось обработать сообщение")
             bot.notify_pending(load_settings())
+            bot.maybe_send_report(load_settings())
         except TelegramError as exc:
             log.warning("Telegram: %s", exc)
             time.sleep(10)

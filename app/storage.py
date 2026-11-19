@@ -237,3 +237,17 @@ def status_counts_since(since_iso: str) -> dict:
             (since_iso, since_iso),
         ).fetchall()
     return {r[0]: r[1] for r in rows}
+
+
+def found_since(since_iso: str) -> list[dict]:
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM vacancies WHERE found_at >= ? ORDER BY id", (since_iso,)
+        ).fetchall()]
+
+
+def acted_since(since_iso: str) -> list[dict]:
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM vacancies WHERE acted_at >= ? ORDER BY acted_at", (since_iso,)
+        ).fetchall()]
