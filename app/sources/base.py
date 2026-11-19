@@ -21,8 +21,11 @@ class Vacancy:
     published_at: str = ""
     contact_email: str = ""
     skills: list[str] = field(default_factory=list)
+    salary_label: str = ""  # готовая строка зарплаты, если вакансия восстановлена из базы
 
     def salary_text(self) -> str:
+        if self.salary_label:
+            return self.salary_label
         if not self.salary_from and not self.salary_to:
             return "не указана"
         parts = []
@@ -69,3 +72,13 @@ def find_email(*texts: str) -> str:
         if match:
             return match.group(0).rstrip(".").lower()
     return ""
+
+
+def from_row(row: dict) -> Vacancy:
+    """Восстанавливает вакансию из строки таблицы vacancies."""
+    return Vacancy(
+        source=row["source"], external_id=row["external_id"], title=row["title"], company=row["company"],
+        url=row["url"], city=row.get("city") or "", description=row.get("description") or "",
+        published_at=row.get("published_at") or "", contact_email=row.get("contact_email") or "",
+        salary_label=row.get("salary") or "",
+    )
