@@ -1,0 +1,106 @@
+"""Публичный поиск вакансий hh.ru (без входа соискателя).
+
+Документация: https://api.hh.ru/openapi/redoc
+hh.ru просит указывать User-Agent с названием приложения и контактом,
+его можно задать переменной окружения HH_USER_AGENT.
+"""
+import logging
+import os
+
+import httpx
+
+from app.sources.base import Vacancy, find_email, html_to_text
+
+log = logging.getLogger(__name__)
+
+API = "https://api.hh.ru"
+USER_AGENT = os.getenv("HH_USER_AGENT", "AI-agent-finding-work/0.2")
+
+
+class HHClient:
+    def __init__(self, client: httpx.Client | None = None):
+        self.http = client or httpx.Client(timeout=30)
+        self.http.headers["HH-User-Agent"] = USER_AGENT
+        self.http.headers["User-Agent"] = USER_AGENT
+        self._areas: dict[str, str | None] = {}
+
+    def area_id(self, city: str) -> str | None:
+        """Находит id региона по названию города. None, если не нашли."""
+        city = (city or "").strip()
+        if not city:
+            return None
+        if city not in self._areas:
+            r = self.http.get(f"{API}/suggests/areas", params={"text": city})
+            r.raise_for_status()
+            items = r.json().get("items", [])
+            exact = [i for i in items if i.get("text", "").lower() == city.lower()]
+            pick = (exact or items or [None])[0]
+            self._areas[city] = pick["id"] if pick else None
+            if not pick:
+                log.warning("hh.ru: город %r не найден, ищу без города", city)
+        return self._areas[city]
+
+    def search(self, settings: dict, period_days: int = 1, max_pages: int = 3) -> list[Vacancy]:
+        positions = settings.get("positions") or []
+        if not positions:
+            return []
+        params: list[tuple[str, str]] = [
+            ("text", " OR ".join(f'"{p}"' for p in positions)),
+            ("search_field", "name"),
+            ("order_by", "publication_time"),
+            ("period", str(period_days)),
+            ("per_page", "50"),
+        ]
+        area = self.area_id(settings.get("city", ""))
+        if area:
+            params.append(("area", area))
+        for s in settings.get("schedule") or []:
+            params.append(("schedule", s))
+        for e in settings.get("employment") or []:
+            params.append(("employment", e))
+        if settings.get("experience"):
+            params.append(("experience", settings["experience"]))
+        if settings.get("salary_from"):
+            params.append(("salary", str(settings["salary_from"])))
+            params.append(("currency", settings.get("currency") or "RUR"))
+        if settings.get("only_with_salary"):
+            params.append(("only_with_salary", "true"))
+
+        found: list[Vacancy] = []
+        for page in range(max_pages):
+            r = self.http.get(f"{API}/vacancies", params=params + [("page", str(page))])
+            r.raise_for_status()
+            data = r.json()
+            found.extend(self._short(item) for item in data.get("items", []))
+            if page + 1 >= data.get("pages", 0):
+                break
+        return found
+
+    def details(self, vacancy: Vacancy) -> Vacancy:
+        """Догружает полное описание, навыки и контакты."""
+        r = self.http.get(f"{API}/vacancies/{vacancy.external_id}")
+        r.raise_for_status()
+        d = r.json()
+        vacancy.description = html_to_text(d.get("description", ""))
+        vacancy.skills = [s["name"] for s in d.get("key_skills") or []]
+        contacts = d.get("contacts") or {}
+        vacancy.contact_email = (contacts.get("email") or "").lower() or find_email(vacancy.description)
+        return vacancy
+
+    @staticmethod
+    def _short(item: dict) -> Vacancy:
+        salary = item.get("salary") or {}
+        snippet = item.get("snippet") or {}
+        return Vacancy(
+            source="hh",
+            external_id=str(item["id"]),
+            title=item.get("name", ""),
+            company=(item.get("employer") or {}).get("name", ""),
+            url=item.get("alternate_url") or f"https://hh.ru/vacancy/{item['id']}",
+            city=(item.get("area") or {}).get("name", ""),
+            salary_from=salary.get("from"),
+            salary_to=salary.get("to"),
+            currency=salary.get("currency") or "",
+            description=html_to_text(" ".join(filter(None, [snippet.get("requirement"), snippet.get("responsibility")]))),
+            published_at=item.get("published_at", ""),
+        )

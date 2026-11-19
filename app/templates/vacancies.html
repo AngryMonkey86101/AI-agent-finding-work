@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Найденные вакансии{% endblock %}
+{% block content %}
+  <nav class="nav"><a href="/">Настройки</a> · <strong>Найденные вакансии</strong></nav>
+  <h1>Найденные вакансии</h1>
+  <p class="sub">Агент проверяет площадки по расписанию. Здесь видно, что он нашёл, как оценил и какое письмо написал.</p>
+
+  <section>
+    <form method="post" action="/run">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      {% if running %}
+        <p>Поиск идёт, обновите страницу через минуту.</p>
+      {% else %}
+        <button type="submit">Запустить поиск сейчас</button>
+      {% endif %}
+    </form>
+    {% if last_run %}
+      <p class="help">Последний ручной запуск: {{ last_run.text }}</p>
+      {% for m in last_run.messages %}<div class="alert">{{ m }}</div>{% endfor %}
+    {% endif %}
+  </section>
+
+  <section>
+    <div class="filters">
+      <a href="/vacancies" class="{% if not status_filter %}active{% endif %}">Все</a>
+      {% for key, label in labels.items() %}
+        <a href="/vacancies?status_filter={{ key }}" class="{% if status_filter == key %}active{% endif %}">{{ label }}</a>
+      {% endfor %}
+    </div>
+    {% if not items %}
+      <p class="help">Пока ничего нет.</p>
+    {% endif %}
+    {% for v in items %}
+      <div class="vac">
+        <h3><a href="{{ v.url }}" target="_blank" rel="noopener">{{ v.title }}</a></h3>
+        <div class="meta">
+          <span class="badge {{ v.status }}">{{ labels.get(v.status, v.status) }}</span>
+          {% if v.score is not none %}<strong>{{ v.score }}%</strong> · {% endif %}
+          {{ v.company }} · {{ v.city or "город не указан" }} · {{ v.salary }} ·
+          {{ "hh.ru" if v.source == "hh" else "SuperJob" }}
+          {% if v.contact_email %} · ✉ {{ v.contact_email }}{% endif %}
+        </div>
+        {% if v.score_reason %}<div class="help">{{ v.score_reason }}</div>{% endif %}
+        {% if v.status_note %}<div class="help">{{ v.status_note }}</div>{% endif %}
+        {% if v.letter %}
+          <details><summary>Письмо</summary><pre>{{ v.letter }}</pre></details>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </section>
+{% endblock %}

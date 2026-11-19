@@ -5,7 +5,9 @@ import secrets
 import uuid
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+import threading
+
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
@@ -122,3 +124,54 @@ async def upload_resume(request: Request, _: str = Depends(require_admin)):
     if old and old["stored_path"] != str(stored):
         Path(old["stored_path"]).unlink(missing_ok=True)
     return RedirectResponse("/?saved=resume", status_code=303)
+
+
+_run_lock = threading.Lock()
+_last_run: dict = {}
+
+
+def _run_now() -> None:
+    from app.pipeline import build_sources, run_once
+
+    if not _run_lock.acquire(blocking=False):
+        return
+    try:
+        settings = current_settings()
+        stats = run_once(settings, build_sources(settings))
+        _last_run.clear()
+        _last_run.update(
+            text=(f"Найдено {stats.found}, новых {stats.new}, отсеяно {stats.filtered}, дублей {stats.duplicates}, "
+                  f"не подошло {stats.low_score}, готово {stats.ready}, ошибок {stats.errors}."),
+            messages=stats.messages,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _last_run.clear()
+        _last_run.update(text=f"Проход завершился ошибкой: {exc}", messages=[])
+    finally:
+        _run_lock.release()
+
+
+@app.get("/vacancies", response_class=HTMLResponse)
+def vacancies_page(request: Request, status_filter: str = "", _: str = Depends(require_admin)):
+    items = storage.list_vacancies(status_filter or None, limit=200)
+    return templates.TemplateResponse(
+        request,
+        "vacancies.html",
+        {
+            "items": items,
+            "labels": storage.STATUS_LABELS,
+            "status_filter": status_filter,
+            "running": _run_lock.locked(),
+            "last_run": _last_run,
+            "csrf": csrf_token(),
+        },
+    )
+
+
+@app.post("/run")
+async def run_now(request: Request, background: BackgroundTasks, _: str = Depends(require_admin)):
+    form = await request.form()
+    check_csrf(form.get("csrf"))
+    if not _run_lock.locked():
+        background.add_task(_run_now)
+    return RedirectResponse("/vacancies", status_code=303)
