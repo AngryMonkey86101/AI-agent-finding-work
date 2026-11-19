@@ -116,7 +116,7 @@ FIELDS: tuple[Field, ...] = (
     Field("deepseek_model", "Модель DeepSeek", "text", "keys", default="deepseek-chat"),
     Field("telegram_bot_token", "Токен Telegram-бота", "secret", "keys", help="Выдаёт @BotFather."),
     Field("telegram_chat_id", "Telegram chat ID", "text", "keys",
-          help="Куда слать уведомления. Узнать свой ID можно у @userinfobot."),
+          help="Сохраните токен бота, напишите боту /start, и он пришлёт ваш chat ID."),
 )
 
 FIELDS_BY_KEY = {f.key: f for f in FIELDS}

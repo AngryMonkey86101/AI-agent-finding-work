@@ -17,3 +17,11 @@ services:
       - ./data:/data
     command: ["python", "-m", "app.worker"]
     restart: unless-stopped
+
+  bot:
+    build: .
+    env_file: .env
+    volumes:
+      - ./data:/data
+    command: ["python", "-m", "app.bot"]
+    restart: unless-stopped

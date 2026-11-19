@@ -56,6 +56,24 @@ STATUS_LABELS = {
 }
 
 
+# Колонки, добавленные после первой версии базы.
+MIGRATIONS = {
+    "vacancies": {
+        "notified_at": "TEXT",
+        "tg_message_id": "INTEGER",
+        "acted_at": "TEXT",
+    },
+}
+
+
+def _migrate(conn) -> None:
+    for table, columns in MIGRATIONS.items():
+        existing = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for name, kind in columns.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -63,10 +81,11 @@ def _now() -> str:
 @contextmanager
 def connect():
     config.ensure_dirs()
-    conn = sqlite3.connect(config.DB_PATH)
+    conn = sqlite3.connect(config.DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     try:
         conn.executescript(SCHEMA)
+        _migrate(conn)
         yield conn
         conn.commit()
     finally:
@@ -170,3 +189,51 @@ def get_vacancy(vacancy_id: int) -> dict | None:
     with connect() as conn:
         row = conn.execute("SELECT * FROM vacancies WHERE id = ?", (vacancy_id,)).fetchone()
     return dict(row) if row else None
+
+
+def pending_notifications(limit: int = 10) -> list[dict]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM vacancies WHERE status = 'ready' AND notified_at IS NULL ORDER BY id LIMIT ?", (limit,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def mark_notified(vacancy_id: int, message_id: int | None) -> None:
+    with connect() as conn:
+        conn.execute(
+            "UPDATE vacancies SET notified_at = ?, tg_message_id = ? WHERE id = ?", (_now(), message_id, vacancy_id)
+        )
+
+
+def set_status(vacancy_id: int, status: str, note: str = "") -> None:
+    now = _now()
+    with connect() as conn:
+        conn.execute(
+            "UPDATE vacancies SET status = ?, status_note = ?, acted_at = ?, updated_at = ? WHERE id = ?",
+            (status, note, now, now, vacancy_id),
+        )
+
+
+def set_letter(vacancy_id: int, letter: str) -> None:
+    with connect() as conn:
+        conn.execute("UPDATE vacancies SET letter = ?, updated_at = ? WHERE id = ?", (letter, _now(), vacancy_id))
+
+
+def get_state(key: str, default=None):
+    """Служебные значения (например, смещение Telegram) храним рядом с настройками с префиксом _."""
+    return load_settings().get(f"_{key}", default)
+
+
+def set_state(key: str, value) -> None:
+    save_settings({f"_{key}": value})
+
+
+def status_counts_since(since_iso: str) -> dict:
+    """Сколько вакансий в каждом статусе найдено или обработано с указанного момента."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT status, COUNT(*) FROM vacancies WHERE found_at >= ? OR acted_at >= ? GROUP BY status",
+            (since_iso, since_iso),
+        ).fetchall()
+    return {r[0]: r[1] for r in rows}
