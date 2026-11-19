@@ -1,0 +1,11 @@
+services:
+  panel:
+    build: .
+    env_file: .env
+    volumes:
+      - ./data:/data
+    ports:
+      # Панель слушает только localhost. Наружу её лучше открывать через nginx с HTTPS
+      # или заходить через SSH-туннель: ssh -L 8000:localhost:8000 user@vps
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
