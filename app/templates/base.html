@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}Агент поиска работы{% endblock %}</title>
+{% block head %}{% endblock %}
 <style>
   :root {
     --bg: #f6f7f9; --card: #fff; --text: #1d2330; --muted: #667085; --border: #d9dde5;
@@ -62,6 +63,12 @@
   .filters { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-bottom: 12px; font-size: 14px; }
   .filters a { color: var(--accent); }
   .filters a.active { color: var(--text); font-weight: 600; text-decoration: none; }
+  .health { display: grid; gap: 6px; }
+  .hrow { display: flex; gap: 10px; align-items: baseline; }
+  .hrow .ok { color: var(--ok); font-weight: 700; }
+  .hrow .bad { color: var(--err); font-weight: 700; }
+  .help + .help, .alert + .alert, .help + .alert, .alert + .help { margin-top: 6px; }
+  .alert { margin-bottom: 0; }
 </style>
 </head>
 <body>

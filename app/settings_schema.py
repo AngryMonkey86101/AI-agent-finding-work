@@ -108,6 +108,10 @@ FIELDS: tuple[Field, ...] = (
     Field("paused", "Поставить агента на паузу", "checkbox", "schedule", default=False),
 
     # --- Ключи
+    Field("hh_contact_email", "Email для hh.ru", "text", "keys", placeholder="you@example.com",
+          help="hh.ru просит указывать контакт разработчика в запросах. Подойдёт ваша почта."),
+    Field("hh_app_token", "Токен приложения hh.ru (необязательно)", "secret", "keys",
+          help="Если hh.ru отвечает 403: зарегистрируйте приложение на dev.hh.ru и вставьте токен приложения."),
     Field("superjob_app_id", "SuperJob ID приложения", "text", "keys",
           help="Из раздела «Мои приложения» на api.superjob.ru."),
     Field("superjob_secret_key", "SuperJob Secret key", "secret", "keys",

@@ -40,7 +40,8 @@ def build_sources(settings: dict, hh_client=None, sj_client=None) -> list:
     sources = []
     platforms = settings.get("platforms") or ["hh"]
     if "hh" in platforms:
-        sources.append(hh_client or HHClient())
+        sources.append(hh_client or HHClient(contact=settings.get("hh_contact_email", ""),
+                                             app_token=settings.get("hh_app_token", "")))
     if "superjob" in platforms and settings.get("superjob_secret_key"):
         sources.append(sj_client or SuperJobClient(settings["superjob_secret_key"]))
     return sources
@@ -66,14 +67,15 @@ def run_once(settings: dict, sources: list, llm: DeepSeek | None = None,
 
     candidates: list[tuple[object, Vacancy]] = []
     for source in sources:
-        name = type(source).__name__
+        name = {"HHClient": "hh.ru", "SuperJobClient": "SuperJob"}.get(type(source).__name__, type(source).__name__)
         try:
             items = source.search(settings)
         except Exception as exc:  # noqa: BLE001 - сеть, лимиты, ошибки площадки
-            log.exception("Поиск %s упал", name)
+            log.error("Поиск %s упал: %s", name, exc)
             stats.messages.append(f"{name}: ошибка поиска: {exc}")
             continue
         stats.found += len(items)
+        stats.messages.append(f"{name}: найдено {len(items)}")
         candidates.extend((source, v) for v in items)
 
     seen_keys: set[str] = set()
@@ -125,4 +127,27 @@ def run_once(settings: dict, sources: list, llm: DeepSeek | None = None,
 
     if stats.limit_reached:
         stats.messages.append("Дневной лимит достигнут, остальные вакансии разберу завтра.")
+    return stats
+
+
+def summary(stats: RunStats) -> str:
+    return (f"Найдено {stats.found}, новых {stats.new}, отсеяно {stats.filtered}, дублей {stats.duplicates}, "
+            f"не подошло {stats.low_score}, готово {stats.ready}, ошибок {stats.errors}.")
+
+
+def run_and_record(settings: dict, by: str) -> RunStats | None:
+    """Проход с записью хода и итога в базу, чтобы панель видела его после обновления страницы."""
+    started = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    storage.set_state("last_run", {"by": by, "started_at": started, "running": True,
+                                   "text": "Поиск идёт…", "messages": []})
+    try:
+        stats = run_once(settings, build_sources(settings))
+        result = {"text": summary(stats), "messages": stats.messages}
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Проход завершился ошибкой")
+        stats = None
+        result = {"text": f"Проход завершился ошибкой: {exc}", "messages": []}
+    storage.set_state("last_run", {"by": by, "started_at": started, "running": False,
+                                   "finished_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                   **result})
     return stats

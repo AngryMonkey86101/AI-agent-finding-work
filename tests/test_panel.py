@@ -196,8 +196,36 @@ def test_vacancies_page_and_run(client, monkeypatch):
     assert "Python-разработчик" not in client.get("/vacancies?status_filter=low_score", auth=AUTH).text
 
     called = []
-    monkeypatch.setattr(main, "_run_now", lambda: called.append(1))
+
+    def fake_run():
+        called.append(1)
+        storage.set_state("last_run", {"by": "вручную из панели", "running": False, "text": "Найдено 3",
+                                       "messages": ["hh.ru: ошибка поиска: 403"],
+                                       "started_at": "2026-11-19T06:00:00+00:00",
+                                       "finished_at": "2026-11-19T06:01:00+00:00"})
+
+    monkeypatch.setattr(main, "_run_now", fake_run)
     token = csrf(client)
     assert client.post("/run", data={"csrf": "bad"}, auth=AUTH).status_code == 403
     r = client.post("/run", data={"csrf": token}, auth=AUTH, follow_redirects=False)
     assert r.status_code == 303 and called == [1]
+    # Итог виден после обновления страницы, в том числе ошибка площадки.
+    html = client.get("/vacancies", auth=AUTH).text
+    assert "Найдено 3" in html and "ошибка поиска: 403" in html and "19.11 09:01" in html
+    assert "Состояние" in html and "Ключ DeepSeek" in html
+
+
+def test_running_search_survives_refresh(client):
+    from datetime import datetime, timezone
+
+    from app import storage
+
+    storage.set_state("last_run", {"by": "по расписанию", "running": True, "text": "Поиск идёт…", "messages": [],
+                                   "started_at": datetime.now(timezone.utc).isoformat()})
+    html = client.get("/vacancies", auth=AUTH).text
+    assert "Поиск идёт." in html and 'http-equiv="refresh"' in html and "Запустить поиск сейчас" not in html
+    # Зависший больше 30 минут поиск не блокирует кнопку.
+    storage.set_state("last_run", {"by": "по расписанию", "running": True, "text": "Поиск идёт…", "messages": [],
+                                   "started_at": "2026-01-01T00:00:00+00:00"})
+    html = client.get("/vacancies", auth=AUTH).text
+    assert "Запустить поиск сейчас" in html and "прервался" in html

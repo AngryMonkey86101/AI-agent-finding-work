@@ -6,7 +6,7 @@ import html
 import logging
 import time
 
-from app import mailer, storage
+from app import mailer, report, storage
 from app.deepseek import DeepSeek
 from app.settings_schema import defaults
 from app.sources.base import from_row
@@ -29,7 +29,8 @@ HELP = (
     "• «Отправил» отмечает отклик для вечернего отчёта.\n"
     "• «Изменить письмо» перепишет его по вашим словам.\n"
     "• «На email» отправит письмо с резюме работодателю, если в вакансии есть почта.\n\n"
-    "/status — сводка за сегодня"
+    "/status — сводка за сегодня\n"
+    "/report — вечерний отчёт прямо сейчас"
 )
 
 
@@ -37,6 +38,11 @@ def load_settings() -> dict:
     values = defaults()
     values.update(storage.load_settings())
     return values
+
+
+def norm_chat(value) -> str:
+    """Chat ID из панели: убираем пробелы, кавычки и прочий мусор вокруг числа."""
+    return str(value or "").strip().strip("'\"").replace(" ", "")
 
 
 def esc(text) -> str:
@@ -84,11 +90,12 @@ class Bot:
         self.tg = tg
         self.llm_factory = llm_factory or (lambda s: DeepSeek(s.get("deepseek_api_key", ""), s.get("deepseek_model", "")))
         self.smtp_factory = smtp_factory
+        self.username = ""
 
     # ---------- исходящие карточки
 
     def notify_pending(self, settings: dict) -> int:
-        chat = settings.get("telegram_chat_id")
+        chat = norm_chat(settings.get("telegram_chat_id"))
         if not chat or settings.get("paused"):
             return 0
         sent = 0
@@ -98,10 +105,18 @@ class Bot:
             sent += 1
         return sent
 
+    def maybe_send_report(self, settings: dict, now=None) -> bool:
+        chat = norm_chat(settings.get("telegram_chat_id"))
+        if not chat or not report.is_due(settings, storage.get_state("report_sent_date"), now):
+            return False
+        self.tg.send(chat, report.build(settings, now))
+        storage.set_state("report_sent_date", report.local_now(settings, now).date().isoformat())
+        return True
+
     def refresh_card(self, v: dict, settings: dict) -> None:
         if not v.get("tg_message_id"):
             return
-        chat = settings["telegram_chat_id"]
+        chat = norm_chat(settings["telegram_chat_id"])
         if v["status"] == "ready":
             self.tg.edit(chat, v["tg_message_id"], card_text(v), card_keyboard(v, settings))
         else:
@@ -111,7 +126,8 @@ class Bot:
     # ---------- входящие
 
     def handle(self, update: dict, settings: dict) -> None:
-        chat = str(settings.get("telegram_chat_id") or "")
+        chat = norm_chat(settings.get("telegram_chat_id"))
+        settings = {**settings, "telegram_chat_id": chat}
         if "callback_query" in update:
             cq = update["callback_query"]
             from_chat = str(((cq.get("message") or {}).get("chat") or {}).get("id", ""))
@@ -124,11 +140,17 @@ class Bot:
         msg = update.get("message") or {}
         from_chat = str((msg.get("chat") or {}).get("id", ""))
         text = (msg.get("text") or "").strip()
+        log.info("Сообщение из чата %s: %s", from_chat, text[:50])
+        if not from_chat:
+            return
         if not chat:
             self.tg.send(from_chat, f"Ваш chat ID: <code>{esc(from_chat)}</code>\n"
                                     "Впишите его в панели настроек в поле «Telegram chat ID».")
             return
         if from_chat != chat:
+            log.warning("Чат %s не совпадает с chat ID из панели (%s), отвечаю подсказкой", from_chat, chat)
+            self.tg.send(from_chat, f"Этот бот настроен на другой chat ID. Ваш chat ID: <code>{esc(from_chat)}</code>\n"
+                                    "Если это ваш бот, впишите это число в панели в поле «Telegram chat ID».")
             return
         self.on_text(text, settings)
 
@@ -142,6 +164,9 @@ class Bot:
         if waiting and not text.startswith("/"):
             storage.set_state("edit_wait", None)
             self.rewrite_letter(int(waiting), text, settings)
+            return
+        if text.startswith("/report"):
+            self.tg.send(chat, report.build(settings))
             return
         if text.startswith("/status"):
             self.tg.send(chat, status_text(settings))
@@ -233,6 +258,24 @@ def status_text(settings: dict) -> str:
     return "\n".join(lines)
 
 
+def start(tg: Telegram, settings: dict) -> str:
+    me = tg.call("getMe")
+    info = tg.call("getWebhookInfo")
+    if info.get("url"):
+        log.warning("На боте был вебхук %s, удаляю его, чтобы получать сообщения", info["url"])
+        tg.call("deleteWebhook")
+    chat = norm_chat(settings.get("telegram_chat_id"))
+    log.info("Бот @%s запущен. Chat ID из панели: %s", me.get("username"), chat or "не задан, напишите боту /start")
+    return me.get("username", "")
+
+
+def heartbeat(ok: bool, text: str) -> None:
+    from datetime import datetime, timezone
+
+    storage.set_state("bot_status", {"ok": ok, "text": text,
+                                     "at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     bot: Bot | None = None
@@ -240,12 +283,21 @@ def main() -> None:
     while True:
         settings = load_settings()
         if not settings.get("telegram_bot_token"):
-            log.info("Нет токена Telegram-бота, жду настройки")
+            log.info("Нет токена Telegram-бота в панели (база %s), жду настройки", storage.config.DB_PATH)
+            heartbeat(False, "нет токена в панели")
             time.sleep(30)
             continue
-        if settings["telegram_bot_token"] != token:
-            token = settings["telegram_bot_token"]
+        if settings["telegram_bot_token"].strip() != token:
+            token = settings["telegram_bot_token"].strip()
             bot = Bot(Telegram(token))
+            try:
+                bot.username = start(bot.tg, settings)
+            except TelegramError as exc:
+                log.error("Не удалось подключиться к Telegram: %s. Проверьте токен в панели.", exc)
+                heartbeat(False, f"ошибка подключения к Telegram: {exc}")
+                token = None
+                time.sleep(30)
+                continue
         try:
             offset = storage.get_state("tg_offset")
             for update in bot.tg.updates(offset):
@@ -255,8 +307,19 @@ def main() -> None:
                 except Exception:  # noqa: BLE001
                     log.exception("Не удалось обработать сообщение")
             bot.notify_pending(load_settings())
+            bot.maybe_send_report(load_settings())
+            heartbeat(True, f"работает как @{bot.username}")
         except TelegramError as exc:
-            log.warning("Telegram: %s", exc)
+            heartbeat(False, f"ошибка Telegram: {exc}")
+            if "Conflict" in str(exc):
+                log.error("Telegram: этот токен уже опрашивает другая копия бота или на нём висит вебхук. "
+                          "Остановите другие копии (docker compose ps) — бот сбросит вебхук сам. %s", exc)
+                try:
+                    bot.tg.call("deleteWebhook")
+                except TelegramError:
+                    pass
+            else:
+                log.warning("Telegram: %s", exc)
             time.sleep(10)
         except Exception:  # noqa: BLE001
             log.exception("Ошибка цикла бота")

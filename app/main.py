@@ -127,28 +127,87 @@ async def upload_resume(request: Request, _: str = Depends(require_admin)):
 
 
 _run_lock = threading.Lock()
-_last_run: dict = {}
+RUN_STALE_MINUTES = 30
 
 
 def _run_now() -> None:
-    from app.pipeline import build_sources, run_once
+    from app.pipeline import run_and_record
 
     if not _run_lock.acquire(blocking=False):
         return
     try:
-        settings = current_settings()
-        stats = run_once(settings, build_sources(settings))
-        _last_run.clear()
-        _last_run.update(
-            text=(f"Найдено {stats.found}, новых {stats.new}, отсеяно {stats.filtered}, дублей {stats.duplicates}, "
-                  f"не подошло {stats.low_score}, готово {stats.ready}, ошибок {stats.errors}."),
-            messages=stats.messages,
-        )
-    except Exception as exc:  # noqa: BLE001
-        _last_run.clear()
-        _last_run.update(text=f"Проход завершился ошибкой: {exc}", messages=[])
+        run_and_record(current_settings(), "вручную из панели")
     finally:
         _run_lock.release()
+
+
+def _age_minutes(iso: str | None) -> float | None:
+    from datetime import datetime, timezone
+
+    if not iso:
+        return None
+    try:
+        return (datetime.now(timezone.utc) - datetime.fromisoformat(iso)).total_seconds() / 60
+    except ValueError:
+        return None
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def last_run_info() -> dict | None:
+    run = storage.get_state("last_run")
+    if not run:
+        return None
+    run = dict(run)
+    age = _age_minutes(run.get("started_at"))
+    if run.get("running") and age is not None and age > RUN_STALE_MINUTES and not _run_lock.locked():
+        run["running"] = False
+        run["text"] = "Поиск прервался (процесс перезапускался). Запустите ещё раз."
+    run["when"] = _local_time(run.get("finished_at") or run.get("started_at"))
+    return run
+
+
+def _local_time(iso: str | None) -> str:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    if not iso:
+        return ""
+    tz = current_settings().get("timezone") or "Europe/Moscow"
+    try:
+        return datetime.fromisoformat(iso).astimezone(ZoneInfo(tz)).strftime("%d.%m %H:%M")
+    except ValueError:
+        return iso
+
+
+def health() -> list[tuple[bool, str, str]]:
+    """Что настроено, а что нет: (ок, что, подсказка)."""
+    s = current_settings()
+    platforms = s.get("platforms") or []
+    bot = storage.get_state("bot_status") or {}
+    bot_age = _age_minutes(bot.get("at"))
+    bot_alive = bot_age is not None and bot_age < 3
+    rows = [
+        (bool(storage.load_resume()), "Резюме загружено", "Загрузите резюме в настройках."),
+        (bool(s.get("positions")), "Желаемые должности", "Заполните должности в настройках."),
+        (bool(s.get("deepseek_api_key")), "Ключ DeepSeek", "Без ключа агент не оценивает вакансии и не пишет письма."),
+    ]
+    if "hh" in platforms:
+        rows.append((bool(s.get("hh_contact_email")), "Email для hh.ru", "hh.ru может отвечать 403 без контакта."))
+    if "superjob" in platforms:
+        rows.append((bool(s.get("superjob_secret_key")), "Ключ SuperJob", "Нужен для поиска на SuperJob."))
+    rows += [
+        (bool(s.get("telegram_bot_token")), "Токен Telegram-бота", "Вставьте токен от @BotFather."),
+        (bool(s.get("telegram_chat_id")), "Telegram chat ID", "Напишите боту /start, он пришлёт номер."),
+        (bot_alive and bot.get("ok", False),
+         "Бот: " + (bot.get("text") or "нет данных"),
+         "Сервис bot не запущен: docker compose up -d bot" if not bot_alive else "Смотрите docker compose logs bot"),
+    ]
+    return rows
 
 
 @app.get("/vacancies", response_class=HTMLResponse)
@@ -161,8 +220,9 @@ def vacancies_page(request: Request, status_filter: str = "", _: str = Depends(r
             "items": items,
             "labels": storage.STATUS_LABELS,
             "status_filter": status_filter,
-            "running": _run_lock.locked(),
-            "last_run": _last_run,
+            "running": _run_lock.locked() or bool((last_run_info() or {}).get("running")),
+            "last_run": last_run_info(),
+            "health": health(),
             "csrf": csrf_token(),
         },
     )
@@ -172,6 +232,8 @@ def vacancies_page(request: Request, status_filter: str = "", _: str = Depends(r
 async def run_now(request: Request, background: BackgroundTasks, _: str = Depends(require_admin)):
     form = await request.form()
     check_csrf(form.get("csrf"))
-    if not _run_lock.locked():
+    if not _run_lock.locked() and not (last_run_info() or {}).get("running"):
+        storage.set_state("last_run", {"by": "вручную из панели", "running": True, "text": "Поиск запускается…",
+                                       "messages": [], "started_at": _now_iso()})
         background.add_task(_run_now)
     return RedirectResponse("/vacancies", status_code=303)

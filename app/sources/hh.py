@@ -14,15 +14,57 @@ from app.sources.base import Vacancy, find_email, html_to_text
 log = logging.getLogger(__name__)
 
 API = "https://api.hh.ru"
-USER_AGENT = os.getenv("HH_USER_AGENT", "AI-agent-finding-work/0.2")
+APP_NAME = "AI-agent-finding-work/0.3"
+
+
+class HHError(RuntimeError):
+    pass
+
+
+def user_agent(contact: str = "") -> str:
+    """hh.ru требует User-Agent вида «Название/версия (контакт)»."""
+    override = os.getenv("HH_USER_AGENT", "").strip()
+    if override:
+        return override
+    contact = (contact or "").strip()
+    return f"{APP_NAME} ({contact})" if contact else APP_NAME
+
+
+def explain(r: httpx.Response) -> str:
+    """Понятное описание ошибки hh.ru по телу ответа."""
+    try:
+        data = r.json()
+    except ValueError:
+        data = {}
+    kinds = [f"{e.get('type')}:{e.get('value')}" if e.get("value") else str(e.get("type"))
+             for e in data.get("errors") or []]
+    detail = ", ".join(kinds) or data.get("description") or r.text[:200].strip()
+    hint = ""
+    if r.status_code == 403 or "forbidden" in detail:
+        hint = (" hh.ru отказал в доступе. Укажите в панели email для hh.ru и токен приложения hh.ru; "
+                "если не поможет, вероятно hh.ru блокирует IP сервера.")
+    if "bad_user_agent" in detail:
+        hint = " hh.ru не принял User-Agent: укажите в панели email для hh.ru."
+    if "captcha" in detail:
+        hint = " hh.ru просит капчу для этого IP."
+    return f"hh.ru ответил {r.status_code} ({detail}).{hint}"
 
 
 class HHClient:
-    def __init__(self, client: httpx.Client | None = None):
+    def __init__(self, client: httpx.Client | None = None, contact: str = "", app_token: str = ""):
         self.http = client or httpx.Client(timeout=30)
-        self.http.headers["HH-User-Agent"] = USER_AGENT
-        self.http.headers["User-Agent"] = USER_AGENT
+        ua = user_agent(contact)
+        self.http.headers["HH-User-Agent"] = ua
+        self.http.headers["User-Agent"] = ua
+        if app_token:
+            self.http.headers["Authorization"] = f"Bearer {app_token.strip()}"
         self._areas: dict[str, str | None] = {}
+
+    def _get(self, path: str, params=None) -> dict:
+        r = self.http.get(f"{API}{path}", params=params)
+        if r.status_code >= 400:
+            raise HHError(explain(r))
+        return r.json()
 
     def area_id(self, city: str) -> str | None:
         """Находит id региона по названию города. None, если не нашли."""
@@ -30,9 +72,7 @@ class HHClient:
         if not city:
             return None
         if city not in self._areas:
-            r = self.http.get(f"{API}/suggests/areas", params={"text": city})
-            r.raise_for_status()
-            items = r.json().get("items", [])
+            items = self._get("/suggests/areas", {"text": city}).get("items", [])
             exact = [i for i in items if i.get("text", "").lower() == city.lower()]
             pick = (exact or items or [None])[0]
             self._areas[city] = pick["id"] if pick else None
@@ -68,9 +108,7 @@ class HHClient:
 
         found: list[Vacancy] = []
         for page in range(max_pages):
-            r = self.http.get(f"{API}/vacancies", params=params + [("page", str(page))])
-            r.raise_for_status()
-            data = r.json()
+            data = self._get("/vacancies", params + [("page", str(page))])
             found.extend(self._short(item) for item in data.get("items", []))
             if page + 1 >= data.get("pages", 0):
                 break
@@ -78,9 +116,7 @@ class HHClient:
 
     def details(self, vacancy: Vacancy) -> Vacancy:
         """Догружает полное описание, навыки и контакты."""
-        r = self.http.get(f"{API}/vacancies/{vacancy.external_id}")
-        r.raise_for_status()
-        d = r.json()
+        d = self._get(f"/vacancies/{vacancy.external_id}")
         vacancy.description = html_to_text(d.get("description", ""))
         vacancy.skills = [s["name"] for s in d.get("key_skills") or []]
         contacts = d.get("contacts") or {}

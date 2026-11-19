@@ -1,23 +1,39 @@
 {% extends "base.html" %}
 {% block title %}Найденные вакансии{% endblock %}
+{% block head %}{% if running %}<meta http-equiv="refresh" content="5">{% endif %}{% endblock %}
 {% block content %}
   <nav class="nav"><a href="/">Настройки</a> · <strong>Найденные вакансии</strong></nav>
   <h1>Найденные вакансии</h1>
   <p class="sub">Агент проверяет площадки по расписанию. Здесь видно, что он нашёл, как оценил и какое письмо написал.</p>
 
   <section>
-    <form method="post" action="/run">
+    <h2>Состояние</h2>
+    <div class="health">
+    {% for ok, label, hint in health %}
+      <div class="hrow"><span class="{{ 'ok' if ok else 'bad' }}">{{ '✓' if ok else '✗' }}</span>
+        <span>{{ label }}{% if not ok %} <span class="help">· {{ hint }}</span>{% endif %}</span></div>
+    {% endfor %}
+    </div>
+  </section>
+
+  <section>
+    <h2>Поиск</h2>
+    {% if last_run %}
+      <p>Последний поиск ({{ last_run.by }}{% if last_run.when %}, {{ last_run.when }}{% endif %}): {{ last_run.text }}</p>
+      {% for m in last_run.messages %}
+        <div class="{{ 'alert' if 'ошибка' in m.lower() or 'не задан' in m.lower() or 'не загружено' in m.lower() else 'help' }}">{{ m }}</div>
+      {% endfor %}
+    {% else %}
+      <p class="help">Поиск ещё не запускался.</p>
+    {% endif %}
+    <form method="post" action="/run" style="margin-top:12px">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       {% if running %}
-        <p>Поиск идёт, обновите страницу через минуту.</p>
+        <p><strong>Поиск идёт.</strong> Страница обновится сама.</p>
       {% else %}
         <button type="submit">Запустить поиск сейчас</button>
       {% endif %}
     </form>
-    {% if last_run %}
-      <p class="help">Последний ручной запуск: {{ last_run.text }}</p>
-      {% for m in last_run.messages %}<div class="alert">{{ m }}</div>{% endfor %}
-    {% endif %}
   </section>
 
   <section>
