@@ -39,6 +39,7 @@ def base_form(token: str, **over) -> dict:
         "search_interval_minutes": "30",
         "schedule": ["remote"],
         "deepseek_api_key": "sk-test-1234",
+        "platforms": ["hh"],
     }
     form.update(over)
     return form
@@ -169,3 +170,16 @@ def test_email_requires_smtp_when_enabled(client):
 
     s = storage.load_settings()
     assert s["email_enabled"] is True and s["smtp_port"] == 465 and s["smtp_password"] == "app-pass"
+
+
+def test_superjob_needs_key(client):
+    token = csrf(client)
+    r = client.post("/settings", data=base_form(token, platforms=["hh", "superjob"]), auth=AUTH)
+    assert r.status_code == 422 and "Нужен для поиска на SuperJob" in r.text
+    r = client.post("/settings", data=base_form(token, platforms=[]), auth=AUTH)
+    assert r.status_code == 422 and "хотя бы одну площадку" in r.text
+    ok = base_form(token, platforms=["hh", "superjob"], superjob_secret_key="v3.r.sj", superjob_app_id="123")
+    assert client.post("/settings", data=ok, auth=AUTH, follow_redirects=False).status_code == 303
+    from app import storage
+
+    assert storage.load_settings()["platforms"] == ["hh", "superjob"]

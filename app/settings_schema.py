@@ -41,6 +41,7 @@ EMPLOYMENT = (
     ("probation", "Стажировка"),
 )
 CURRENCY = (("RUR", "₽ RUB"), ("USD", "$ USD"), ("EUR", "€ EUR"), ("KZT", "₸ KZT"), ("BYR", "Br BYN"))
+PLATFORMS = (("hh", "hh.ru"), ("superjob", "SuperJob"))
 LETTER_LANG = (("ru", "Русский"), ("en", "English"))
 
 GROUPS = (
@@ -53,6 +54,7 @@ GROUPS = (
 
 FIELDS: tuple[Field, ...] = (
     # --- Что ищем
+    Field("platforms", "Где искать", "multiselect", "search", default=["hh", "superjob"], choices=PLATFORMS),
     Field("positions", "Желаемые должности", "textarea", "search", required=True,
           help="По одной на строку. Например: Python-разработчик", placeholder="Python-разработчик\nBackend-разработчик"),
     Field("keywords", "Ключевые слова", "textarea", "search",
@@ -106,6 +108,10 @@ FIELDS: tuple[Field, ...] = (
     Field("paused", "Поставить агента на паузу", "checkbox", "schedule", default=False),
 
     # --- Ключи
+    Field("superjob_app_id", "SuperJob ID приложения", "text", "keys",
+          help="Из раздела «Мои приложения» на api.superjob.ru."),
+    Field("superjob_secret_key", "SuperJob Secret key", "secret", "keys",
+          help="Нужен для поиска вакансий на SuperJob."),
     Field("deepseek_api_key", "DeepSeek API key", "secret", "keys"),
     Field("deepseek_model", "Модель DeepSeek", "text", "keys", default="deepseek-chat"),
     Field("telegram_bot_token", "Токен Telegram-бота", "secret", "keys", help="Выдаёт @BotFather."),
@@ -192,6 +198,11 @@ def parse_form(form, current: dict) -> tuple[dict, dict]:
     except (ZoneInfoNotFoundError, ValueError):
         errors["timezone"] = "Неизвестный часовой пояс. Пример: Europe/Moscow."
     values["timezone"] = tz
+
+    if not values.get("platforms"):
+        errors["platforms"] = "Выберите хотя бы одну площадку."
+    if "superjob" in values.get("platforms", []) and not values.get("superjob_secret_key"):
+        errors["superjob_secret_key"] = "Нужен для поиска на SuperJob."
 
     if values.get("email_enabled"):
         for key in ("smtp_host", "smtp_user", "smtp_password"):
