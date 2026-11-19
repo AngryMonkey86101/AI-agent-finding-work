@@ -110,6 +110,9 @@ FIELDS: tuple[Field, ...] = (
     # --- Ключи
     Field("hh_contact_email", "Email для hh.ru", "text", "keys", placeholder="you@example.com",
           help="hh.ru просит указывать контакт разработчика в запросах. Подойдёт ваша почта."),
+    Field("hh_proxy", "Прокси для hh.ru", "secret", "keys",
+          help="Если hh.ru отвечает 403 (блокирует IP сервера). Формат: http://логин:пароль@адрес:порт "
+               "или socks5://логин:пароль@адрес:порт. Через прокси идут только запросы к hh.ru."),
     Field("hh_app_token", "Токен приложения hh.ru (необязательно)", "secret", "keys",
           help="Если hh.ru отвечает 403: зарегистрируйте приложение на dev.hh.ru и вставьте токен приложения."),
     Field("superjob_app_id", "SuperJob ID приложения", "text", "keys",
@@ -202,6 +205,10 @@ def parse_form(form, current: dict) -> tuple[dict, dict]:
     except (ZoneInfoNotFoundError, ValueError):
         errors["timezone"] = "Неизвестный часовой пояс. Пример: Europe/Moscow."
     values["timezone"] = tz
+
+    proxy = values.get("hh_proxy") or ""
+    if proxy and not re.match(r"^(https?|socks5h?)://[^\s]+:\d+/?$", proxy):
+        errors["hh_proxy"] = "Формат: http://логин:пароль@адрес:порт или socks5://адрес:порт."
 
     if not values.get("platforms"):
         errors["platforms"] = "Выберите хотя бы одну площадку."

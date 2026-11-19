@@ -229,3 +229,26 @@ def test_running_search_survives_refresh(client):
                                    "started_at": "2026-01-01T00:00:00+00:00"})
     html = client.get("/vacancies", auth=AUTH).text
     assert "Запустить поиск сейчас" in html and "прервался" in html
+
+
+def test_proxy_validation(client):
+    token = csrf(client)
+    r = client.post("/settings", data=base_form(token, hh_proxy="1.2.3.4"), auth=AUTH)
+    assert r.status_code == 422 and "socks5://" in r.text
+    ok = base_form(token, hh_proxy="socks5://user:pw@1.2.3.4:1080")
+    assert client.post("/settings", data=ok, auth=AUTH, follow_redirects=False).status_code == 303
+    from app import storage
+
+    assert storage.load_settings()["hh_proxy"] == "socks5://user:pw@1.2.3.4:1080"
+    assert "user:pw" not in client.get("/", auth=AUTH).text
+
+
+def test_check_hh_button(client, monkeypatch):
+    from app.sources import hh
+
+    monkeypatch.setattr(hh.HHClient, "check", lambda self: (_ for _ in ()).throw(hh.HHError("hh.ru ответил 403 (forbidden).")))
+    token = csrf(client)
+    r = client.post("/check-hh", data={"csrf": token}, auth=AUTH, follow_redirects=False)
+    assert r.status_code == 303
+    html = client.get("/vacancies", auth=AUTH).text
+    assert "Проверка hh.ru" in html and "403" in html and "(напрямую)" in html

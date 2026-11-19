@@ -184,7 +184,7 @@ def _local_time(iso: str | None) -> str:
         return iso
 
 
-def health() -> list[tuple[bool, str, str]]:
+def config_health() -> list[tuple[bool, str, str]]:
     """Что настроено, а что нет: (ок, что, подсказка)."""
     s = current_settings()
     platforms = s.get("platforms") or []
@@ -222,7 +222,9 @@ def vacancies_page(request: Request, status_filter: str = "", _: str = Depends(r
             "status_filter": status_filter,
             "running": _run_lock.locked() or bool((last_run_info() or {}).get("running")),
             "last_run": last_run_info(),
-            "health": health(),
+            "health": config_health(),
+            "hh_check": storage.get_state("hh_check"),
+            "hh_enabled": "hh" in (current_settings().get("platforms") or []),
             "csrf": csrf_token(),
         },
     )
@@ -236,4 +238,29 @@ async def run_now(request: Request, background: BackgroundTasks, _: str = Depend
         storage.set_state("last_run", {"by": "вручную из панели", "running": True, "text": "Поиск запускается…",
                                        "messages": [], "started_at": _now_iso()})
         background.add_task(_run_now)
+    return RedirectResponse("/vacancies", status_code=303)
+
+
+@app.post("/check-hh")
+async def check_hh(request: Request, _: str = Depends(require_admin)):
+    from starlette.concurrency import run_in_threadpool
+
+    form = await request.form()
+    check_csrf(form.get("csrf"))
+    s = current_settings()
+
+    def probe() -> dict:
+        from app.sources.hh import HHClient
+
+        client = HHClient(contact=s.get("hh_contact_email", ""), app_token=s.get("hh_app_token", ""),
+                          proxy=s.get("hh_proxy", ""))
+        via = " (через прокси)" if (s.get("hh_proxy") or "").strip() else " (напрямую)"
+        try:
+            return {"ok": True, "text": client.check() + via}
+        except Exception as exc:  # noqa: BLE001 - сеть, прокси, ответ hh
+            return {"ok": False, "text": f"{exc}{via}"}
+
+    result = await run_in_threadpool(probe)
+    result["when"] = _local_time(_now_iso())
+    storage.set_state("hh_check", result)
     return RedirectResponse("/vacancies", status_code=303)
