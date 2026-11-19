@@ -41,6 +41,7 @@ def build_sources(settings: dict, hh_client=None, sj_client=None) -> list:
     platforms = settings.get("platforms") or ["hh"]
     if "hh" in platforms:
         sources.append(hh_client or HHClient(contact=settings.get("hh_contact_email", ""),
+                                             proxy=settings.get("hh_proxy", ""),
                                              app_token=settings.get("hh_app_token", "")))
     if "superjob" in platforms and settings.get("superjob_secret_key"):
         sources.append(sj_client or SuperJobClient(settings["superjob_secret_key"]))

@@ -41,8 +41,8 @@ def explain(r: httpx.Response) -> str:
     detail = ", ".join(kinds) or data.get("description") or r.text[:200].strip()
     hint = ""
     if r.status_code == 403 or "forbidden" in detail:
-        hint = (" hh.ru отказал в доступе. Укажите в панели email для hh.ru и токен приложения hh.ru; "
-                "если не поможет, вероятно hh.ru блокирует IP сервера.")
+        hint = (" hh.ru не пускает запросы с IP этого сервера. Укажите в панели «Прокси для hh.ru» "
+                "с российским IP.")
     if "bad_user_agent" in detail:
         hint = " hh.ru не принял User-Agent: укажите в панели email для hh.ru."
     if "captcha" in detail:
@@ -51,8 +51,10 @@ def explain(r: httpx.Response) -> str:
 
 
 class HHClient:
-    def __init__(self, client: httpx.Client | None = None, contact: str = "", app_token: str = ""):
-        self.http = client or httpx.Client(timeout=30)
+    def __init__(self, client: httpx.Client | None = None, contact: str = "", app_token: str = "",
+                 proxy: str = ""):
+        proxy = (proxy or "").strip() or None
+        self.http = client or httpx.Client(timeout=30, proxy=proxy)
         ua = user_agent(contact)
         self.http.headers["HH-User-Agent"] = ua
         self.http.headers["User-Agent"] = ua
@@ -65,6 +67,11 @@ class HHClient:
         if r.status_code >= 400:
             raise HHError(explain(r))
         return r.json()
+
+    def check(self) -> str:
+        """Пробный запрос: доступен ли hh.ru с этого сервера (и через прокси, если он задан)."""
+        data = self._get("/vacancies", {"text": "python", "per_page": "1"})
+        return f"hh.ru доступен, по запросу «python» сейчас {data.get('found', 0)} вакансий."
 
     def area_id(self, city: str) -> str | None:
         """Находит id региона по названию города. None, если не нашли."""

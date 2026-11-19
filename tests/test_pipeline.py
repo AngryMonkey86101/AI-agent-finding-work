@@ -258,7 +258,7 @@ def test_hh_403_is_explained():
     client = HHClient(httpx.Client(transport=httpx.MockTransport(handler)), contact="me@x.ru", app_token="tok")
     with pytest.raises(HHError) as err:
         client.search({"positions": ["Python"]})
-    assert "403" in str(err.value) and "forbidden" in str(err.value) and "IP сервера" in str(err.value)
+    assert "403" in str(err.value) and "forbidden" in str(err.value) and "Прокси для hh.ru" in str(err.value)
 
 
 def test_hh_headers_from_settings(monkeypatch):
@@ -270,3 +270,30 @@ def test_hh_headers_from_settings(monkeypatch):
     client.search({"positions": ["Python"]})
     assert seen[-1].headers["HH-User-Agent"] == "AI-agent-finding-work/0.3 (me@x.ru)"
     assert seen[-1].headers["Authorization"] == "Bearer tok"
+
+
+def test_hh_proxy_is_used(monkeypatch):
+    from app.sources import hh
+
+    captured = {}
+    real = httpx.Client
+
+    def fake_client(*args, **kwargs):
+        captured.update(kwargs)
+        return real(transport=hh_transport([]))
+
+    monkeypatch.setattr(hh.httpx, "Client", fake_client)
+    hh.HHClient(proxy=" socks5://u:p@1.2.3.4:1080 ")
+    assert captured["proxy"] == "socks5://u:p@1.2.3.4:1080"
+    hh.HHClient(proxy="")
+    assert captured["proxy"] is None
+
+
+def test_hh_check():
+    from app.sources.hh import HHClient
+
+    def handler(request):
+        return httpx.Response(200, json={"found": 1234, "items": []})
+
+    client = HHClient(httpx.Client(transport=httpx.MockTransport(handler)))
+    assert "1234" in client.check()
