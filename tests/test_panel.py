@@ -183,3 +183,21 @@ def test_superjob_needs_key(client):
     from app import storage
 
     assert storage.load_settings()["platforms"] == ["hh", "superjob"]
+
+
+def test_vacancies_page_and_run(client, monkeypatch):
+    from app import main, storage
+    from app.sources.base import Vacancy
+
+    storage.save_vacancy(Vacancy("hh", "1", "Python-разработчик", "Ромашка", "https://hh.ru/vacancy/1"),
+                         "k1", "ready", score=85, reason="Совпадает стек", letter="Текст письма")
+    html = client.get("/vacancies", auth=AUTH).text
+    assert "Python-разработчик" in html and "85%" in html and "Текст письма" in html
+    assert "Python-разработчик" not in client.get("/vacancies?status_filter=low_score", auth=AUTH).text
+
+    called = []
+    monkeypatch.setattr(main, "_run_now", lambda: called.append(1))
+    token = csrf(client)
+    assert client.post("/run", data={"csrf": "bad"}, auth=AUTH).status_code == 403
+    r = client.post("/run", data={"csrf": token}, auth=AUTH, follow_redirects=False)
+    assert r.status_code == 303 and called == [1]
